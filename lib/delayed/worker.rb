@@ -50,6 +50,7 @@ module Delayed
       @quiet = options[:quiet]
       self.class.min_priority = options[:min_priority] if options.has_key?(:min_priority)
       self.class.max_priority = options[:max_priority] if options.has_key?(:max_priority)
+      @already_retried = false
     end
 
     # Every worker has a unique name which by default is the pid of the process. There are some
@@ -118,6 +119,7 @@ module Delayed
     end
     
     def run(job)
+      self.ensure_db_connection
       runtime =  Benchmark.realtime do
         Timeout.timeout(self.class.max_run_time.to_i) { job.invoke_job }
         job.destroy
@@ -181,5 +183,22 @@ module Delayed
 
       run(job) if job
     end
+
+    # Makes a dummy call to the database to make sure we're still connected
+    def ensure_db_connection
+      begin
+        ActiveRecord::Base.connection.execute("select 'I am alive'")
+      rescue ActiveRecord::StatementInvalid
+        ActiveRecord::Base.connection.reconnect!
+        unless @already_retried
+          @already_retried = true
+          retry
+        end
+        raise
+      else
+        @already_retried = false
+      end
+    end
+
   end
 end
